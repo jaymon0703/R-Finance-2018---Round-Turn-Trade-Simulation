@@ -1,0 +1,926 @@
+---
+title: "Round Turn Trade Simulation - R/Finance 2018"
+author: "Jasen Mackie & Brian G. Peterson"
+date: "updated `r format(Sys.time(), '%d %B %Y')`"
+output:
+    ioslides_presentation:
+     widescreen: yes
+---
+
+<style>
+slides > slide { overflow: scroll; background: #E8E8E8; }
+slides > slide:not(.nobackground):after {
+  content: ''; background: #E8E8E8;
+}
+slides > slide:not(.nobackground):before {
+  background: none;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r intro1, include=FALSE}
+
+# intro
+
+```
+
+## Agenda
+
+>- Performance Simulations
+  
+>- Round Turn Trade Simulations
+  
+>- Stylized facts & Round Turn tradeDef
+  
+>- Empirical examples
+
+>- Future Work
+
+>- Conclusion
+
+
+## {.flexbox .vcenter}
+
+```{r Pat Burns, include=FALSE}
+
+# Pat Burns (2004) covers the use of random portfolios for performance measurement and in a subsequent paper in 2006 for evaluating trading strategies which he terms a related but distinct task. He goes on to mention in his evaluating strategies paper that statistical tests for a signal's predictiveness was generally possible even in the presence of potential data snooping bias. Things have likely changed in the 12 years since in that data snooping has become more prevalent, with more data, significantly advanced computing power and the ability to fit an open source model to almost any dataset.
+
+```
+
+Pat Burns - "If we generate a random subset of the paths, then we can make statistical statements about the quality of the strategy."
+
+
+## {.flexbox .vcenter}
+
+```{r Tomasini, include=FALSE}
+
+# Tomasini & Jaeckle in their Trading Systems book refer to the analysis of trading systems using Monte Carlo analysis of trade PNL. In particular they mention the benefit of a confidence interval estimation for max drawdowns.
+
+```
+
+Jaekle & Tomasini - "Changing the order of the performed trades gives you valuable estimations about expected maximum drawdowns."
+
+
+## {.flexbox .vcenter}
+
+```{r Lopez de Prado, include=FALSE}
+
+# In the Probability of Backtest Overfitting paper by de Prado et al in 2015, they present a method for assessing data snooping as it relates to backtests, which are used by investment firms and portfolio managers to allocate capital.
+
+```
+
+Lopez de Prado et al - "...because the signal-to-noise ratio is so weak, often
+the result of such calibration is that parameters are chosen to profit from
+past noise rather than future signal."
+
+
+## {.flexbox .vcenter}
+
+```{r Harvey, include=FALSE}
+
+# Harvey et al, in their series of papers including Backtesting and the Cross-Section of Expected Returns discuss their general dismay at the reported significance of papers attempting to explain the cross-section of expected returns. They propose a method for deflating the Sharpe Ratio when taking into account the data snooping bias otherwise referred to as Multiple Hypothesis testing.
+
+```
+
+Harvey et al - "We argue that most claimed research findings in financial economics are likely false."
+
+
+## {.flexbox .vcenter}
+
+What all these methods have in common, is an element of random sampling based on some constraint. What we propose in blotter:::txnsim() is the random sampling of round turn trades bound by the constraint of the stylized facts of the observed strategy.
+
+
+## Why Round Turn Trade Simulation?
+
+```{r Portfolio Simulations, include=FALSE}
+
+# Comapared with more well-known simulation methods, such as simulating portfolio P&L, Round Turn Trade Simulation has the following benefits:
+
+  # 1. Increased transparency, since you can view the simulation detail down to the exact transaction, thereby comparing the original strategy being simulated to random entries and exits with the same overall dynamic
+
+  # 2. More realistic since you sample from trade durations and quantities actually observed inside the strategy, thereby creating a distribution around the trading dynamics, not just the daily P&L
+
+  # What all this means, of course, is you are effectively creating simulated traders with the same style but zero skill
+
+```
+
+>- Increased transparency <br><br>
+
+>- More realistic <br><br>
+
+>- Effectively creating simulated traders with the same style but zero skill
+
+
+## Stylized Facts
+
+```{r stylized facts, include=FALSE}
+
+# If you consider the stylized facts of a series of transactions that are the output of a discretionary or systematic trading strategy, it should be clear that there is a lot of information available to work with. The stylized facts txnsim() uses for simulating round turns include;
+
+#   percent time in market (and percent time flat)
+
+#   ratio of long to short position taking (in duration terms)
+
+#   number of levels or layered trades observed, limited by max position (subject to change if we solve for a more optimal layering procedure taking into account total trade duration...more on that in a bit)
+
+# Using these stylized facts, txnsim() samples either with or without replacement between flat periods, short periods and long periods and then layers onto these periods the sampled quantities from the original strategy with their respective durations.
+
+```
+
+>- Round turn trade durations <br><br>
+
+>- Ratio of long:short durations <br><br>
+
+>- Quantity of each round turn trade <br><br>
+
+>- Direction of round turns <br><br>
+
+>- Number of layers entered, limited by maximum position 
+
+
+## Round Turn Trades
+
+>- tradeDef = ?  <br><br>
+
+>- flat.to.flat <br><br>
+
+>- flat.to.reduced || increased.to.reduced
+
+
+```{r round turn trades, include=FALSE}
+
+# In order to sample round turn trades, the analyst first needs to define what a round turn trade is for their purposes. In txnsim() there is a parameter named tradeDef which can take one of 3 arguments, 1. "flat.to.flat", 2. "flat.to.reduced", 3. "increased.to.reduced". The argument is subsequently passed to the blotter::perTradeStats() function from which we extract the original strategy's stylized facts.
+
+# For a more comprehensive explanation of the different trade definitions, i will refer you to the help documentation for the perTradeStats() function as well as the documentation for the txnsim() function in blotter.
+
+```
+
+
+## Longtrend {.flexbox .vcenter}
+
+```{r longtrend, include=FALSE}
+# The first empirical example we will take a look at is an analysis using txnsim() and the longtrend demo in blotter. My only modification to the demo was to end the strategy in Dec 2017, purely for the purposes of replicating my results.
+
+# As we can see in the blue positionFill window, the strategy only enters into a position once, before exiting.
+
+require(quantmod)
+require(TTR)
+require(blotter)
+require(xts)
+
+Sys.setenv(TZ="UTC")
+
+# Try to clean up in case the demo was run previously
+try(rm("account.longtrend","portfolio.longtrend",pos=.blotter),silent=TRUE)
+try(rm("ltaccount","ltportfolio","ClosePrice","CurrentDate","equity","GSPC","i","initDate","initEq","Posn","UnitSize","verbose"),silent=TRUE)
+
+
+# Set initial values
+initDate='1997-12-31'
+initEq=100000
+
+# Load data with quantmod
+# print("Loading data")
+currency("USD")
+stock("GSPC",currency="USD",multiplier=1)
+getSymbols('^GSPC', src='yahoo', index.class=c("POSIXt","POSIXct"),from='1998-01-01')
+GSPC=to.monthly(GSPC, indexAt='endof', drop.time=FALSE)
+GSPC=GSPC[-which(index(GSPC)>"2017-12-31")] # in order to run backtest until 31/12/2017 we remove any data points after this date
+
+# Set up indicators with TTR
+print("Setting up indicators")
+GSPC$SMA10m <- SMA(GSPC[,grep('Adj',colnames(GSPC))], 10)
+
+# Set up a portfolio object and an account object in blotter
+print("Initializing portfolio and account structure")
+ltportfolio='longtrend'
+ltaccount='longtrend'
+
+initPortf(ltportfolio,'GSPC', initDate=initDate)
+initAcct(ltaccount,portfolios='longtrend', initDate=initDate, initEq=initEq)
+verbose=TRUE
+
+# Create trades
+for( i in 10:NROW(GSPC) ) { 
+    # browser()
+    CurrentDate=time(GSPC)[i]
+    cat(".")
+    equity = getEndEq(ltaccount, CurrentDate)
+
+    ClosePrice = as.numeric(Ad(GSPC[i,]))
+    Posn = getPosQty(ltportfolio, Symbol='GSPC', Date=CurrentDate)
+    UnitSize = as.numeric(trunc(equity/ClosePrice))
+
+    # Position Entry (assume fill at close)
+    if( Posn == 0 ) { 
+    # No position, so test to initiate Long position
+        if( as.numeric(Ad(GSPC[i,])) > as.numeric(GSPC[i,'SMA10m']) ) { 
+            cat('\n')
+            # Store trade with blotter
+            addTxn(ltportfolio, Symbol='GSPC', TxnDate=CurrentDate, TxnPrice=ClosePrice, TxnQty = UnitSize , TxnFees=0, verbose=verbose)
+        } 
+    } else {
+    # Have a position, so check exit
+        if( as.numeric(Ad(GSPC[i,]))  <  as.numeric(GSPC[i,'SMA10m'])) { 
+            cat('\n')
+            # Store trade with blotter
+            addTxn(ltportfolio, Symbol='GSPC', TxnDate=CurrentDate, TxnPrice=ClosePrice, TxnQty = -Posn , TxnFees=0, verbose=verbose)
+        } 
+    }
+
+    # Calculate P&L and resulting equity with blotter
+    updatePortf(ltportfolio, Dates = CurrentDate)
+    updateAcct(ltaccount, Dates = CurrentDate)
+    updateEndEq(ltaccount, Dates = CurrentDate)
+} # End dates loop
+cat('\n')
+
+# Chart results with quantmod
+chart.Posn(ltportfolio, Symbol = 'GSPC', Dates = '1998::')
+plot(add_SMA(n=10,col='darkgreen', on=1))
+
+#look at a transaction summary
+getTxns(Portfolio="longtrend", Symbol="GSPC")
+
+# Copy the results into the local environment
+print("Retrieving resulting portfolio and account")
+ltportfolio = getPortfolio("longtrend")
+ltaccount = getAccount("longtrend")
+```
+
+```{r longtrend performance, echo=TRUE}
+chart.Posn("longtrend", Symbol="GSPC")
+```
+
+
+<!-- ## longtrend -->
+
+<!-- - txnsim helper function - `?txnsim` -->
+```{r longtrend txnsim helper function, include=FALSE}
+ex.txnsim <- function(Portfolio, n ,replacement=FALSE, tradeDef='increased.to.reduced',
+                      chart=FALSE){
+  out <- txnsim(Portfolio,n,replacement, tradeDef = tradeDef)
+  if(isTRUE(chart)) {
+    portnames <- blotter:::txnsim.portnames(Portfolio, replacement, n)
+    for (i in 1:n){
+      p<- portnames[i]
+      symbols<-names(getPortfolio(p)$symbols)
+      for(symbol in symbols) {
+        dev.new()
+        chart.Posn(p,symbol)
+      }
+    }
+  }
+  invisible(out)
+}
+```
+
+
+## 
+
+```{r longtrend_txnsim text, include=FALSE}
+
+# If we look at how the strategy performed overall (after setting the seed to my lucky number 333), relative to its random replicates we can see fairly quickly that it is a difficult strategy to beat.
+
+```
+
+```{r longtrend_txnsim, fig.align="center", echo=TRUE}
+set.seed(333)
+lt.wr <- ex.txnsim('longtrend',n=1000,replacement=TRUE,chart=FALSE,tradeDef="flat.to.flat")
+plot(lt.wr)
+```
+
+
+## Position Fill
+
+```{r Positionfil longtrend text, include=FALSE}
+
+# To observe the stylized facts of the original versus the winning replicate strategy, we can contrast the Positionfills of both.
+
+# We see replicate number 664 out of 1,000 was the most profitable strategy overall, and we get a good sense of how txnsim() honoured the stylized facts of the original strategy when determining the random entries and exits of the ultimate winning replicate number 664.
+
+```
+
+- Original strategy vs winning replicate
+
+```{r Positionfil longtrend, fig.align="center", echo=FALSE}
+# Next, we take a closer look at a comparison of the position fill through time of the original strategy
+# and the winning replicate, to get a sense of the ability for txnsim to honour the stylized fact constraint
+par(mfrow = c(2, 1))
+
+Prices=get("GSPC", envir=.GlobalEnv)
+pname <- "longtrend"
+Portfolio<-getPortfolio(pname)
+Position = Portfolio$symbols[["GSPC"]]$txn$Pos.Qty
+if(as.POSIXct(first(index(Prices)))<as.POSIXct(first(index(Position)))){ Position<-rbind(xts(0,order.by=first(index(Prices)-1)),Position)
+}
+Positionfill = na.locf(merge(Position,index(Prices)))
+chart.BarVaR(Positionfill, main ="positionFill - longtrend")
+
+win_rep <- names(lt.wr$ranks[,6][which(lt.wr$ranks[,6] == 1)])
+# pname <- "txnsim.wr.longtrend.1"
+pname <- win_rep
+Portfolio_1<-getPortfolio(pname)
+Position_1 = Portfolio_1$symbols[["GSPC"]]$txn$Pos.Qty
+if(as.POSIXct(first(index(Prices)))<as.POSIXct(first(index(Position_1)))){ Position_1<-rbind(xts(0,order.by=first(index(Prices)-1)),Position_1)
+}
+Positionfill_1 = na.locf(merge(Position_1,index(Prices)))
+chart.BarVaR(Positionfill_1, main=paste0("positionFill - ", win_rep))
+
+par(mfrow = c(1, 1)) #reset this parameter
+# # hist(Positionfill)
+# par(mar=c(1,4,0,2))
+# chart.BarVaR(Positionfill)
+# 
+# par(mar=c(5,4,0,2))
+# chart.BarVaR(Positionfill_1)
+# 
+# chart.Posn("txnsim.wr.longtrend.1", Symbol = "GSPC")
+```
+
+
+<!-- ## Trade Durations without replacement -->
+
+```{r duration longtrend_txnsim flat.to.flat without replacement, include=FALSE}
+# first call txnsim without replacement
+lt.nr <- ex.txnsim('longtrend',n=1000, replacement = FALSE, chart = FALSE, tradeDef = "flat.to.flat")
+
+pt_lt <- perTradeStats("longtrend", tradeDef = "flat.to.flat", includeFlatPeriods = TRUE)
+lt_totaldur <- as.numeric(sum(pt_lt$duration)/86400) # total duration for original longtrend strategy
+lt_longdur <- as.numeric(sum(pt_lt$duration[which(pt_lt$Init.Qty > 0)])/86400) # long duration for original longtrend strategy
+lt_flatdur <- as.numeric(sum(pt_lt$duration[which(pt_lt$Init.Qty == 0)])/86400) # flat duration for original longtrend strategy
+
+rep1_longdur.nr <- as.numeric(sum(lt.nr$replicates$GSPC[[1]][which(lt.nr$replicates$GSPC[[1]]$quantity > 0),2])/86400) # long duration for replicate 1
+rep1_flatdur.nr <- as.numeric(sum(lt.nr$replicates$GSPC[[1]][which(lt.nr$replicates$GSPC[[1]]$quantity == 0),2])/86400) # flat duration for replicate 1
+
+rep5_longdur.nr <- as.numeric(sum(lt.nr$replicates$GSPC[[5]][which(lt.nr$replicates$GSPC[[5]]$quantity > 0),2])/86400) # long duration for replicate 5
+rep5_flatdur.nr <- as.numeric(sum(lt.nr$replicates$GSPC[[5]][which(lt.nr$replicates$GSPC[[5]]$quantity == 0),2])/86400) # flat duration for replicate 5
+
+rep10_longdur.nr <- as.numeric(sum(lt.nr$replicates$GSPC[[10]][which(lt.nr$replicates$GSPC[[10]]$quantity > 0),2])/86400) # long duration for replicate 10
+rep10_flatdur.nr <- as.numeric(sum(lt.nr$replicates$GSPC[[10]][which(lt.nr$replicates$GSPC[[10]]$quantity == 0),2])/86400) # flat duration for replicate 10
+
+
+cat("\n",
+    lt_longdur, "long period duration for original strategy", "\n",
+    lt_flatdur, "flat period duration for original strategy", "\n",
+    lt_longdur + lt_flatdur, "total duration", "\n",
+    "\n",
+    rep1_longdur.nr, "long period duration for replicate 1", "\n",
+    rep1_flatdur.nr, "flat period duration for replicate 1", "\n",
+    rep1_longdur.nr + rep1_flatdur.nr, "total duration", "\n", "\n",
+    rep5_longdur.nr, "long period duration for replicate 5", "\n",
+    rep5_flatdur.nr, "flat period duration for replicate 5", "\n",
+    rep5_longdur.nr + rep5_flatdur.nr, "total duration", "\n", "\n",
+    rep10_longdur.nr, "long period duration for replicate 10","\n",
+    rep10_flatdur.nr, "flat period duration for replicate 10","\n",
+    rep10_longdur.nr + rep10_flatdur.nr, "total duration")
+```
+
+
+<!-- ## Trade Durations with replacement -->
+
+```{r long and flat durations longtrend_txnsim flat.to.flat with replacement, include=FALSE}
+lt_flatdur <- as.numeric(sum(pt_lt$duration[which(pt_lt$Init.Qty == 0)])/86400) # flat duration for original longtrend strategy
+
+rep1_longdur.wr <- as.numeric(sum(lt.wr$replicates$GSPC[[1]][which(lt.wr$replicates$GSPC[[1]]$quantity > 0),2])/86400) # long duration for replicate 1
+rep1_flatdur.wr <- as.numeric(sum(lt.wr$replicates$GSPC[[1]][which(lt.wr$replicates$GSPC[[1]]$quantity == 0),2])/86400) # flat duration for replicate 1
+
+rep5_longdur.wr <- as.numeric(sum(lt.wr$replicates$GSPC[[5]][which(lt.wr$replicates$GSPC[[5]]$quantity > 0),2])/86400) # long duration for replicate 5
+rep5_flatdur.wr <- as.numeric(sum(lt.wr$replicates$GSPC[[5]][which(lt.wr$replicates$GSPC[[5]]$quantity == 0),2])/86400) # flat duration for replicate 5
+
+rep10_longdur.wr <- as.numeric(sum(lt.wr$replicates$GSPC[[10]][which(lt.wr$replicates$GSPC[[10]]$quantity > 0),2])/86400) # long duration for replicate 10
+rep10_flatdur.wr <- as.numeric(sum(lt.wr$replicates$GSPC[[10]][which(lt.wr$replicates$GSPC[[10]]$quantity == 0),2])/86400) # flat duration for replicate 10
+
+cat("\n",
+    lt_longdur, "long period duration for original strategy", "\n",
+    lt_flatdur, "flat period duration for original strategy", "\n",
+    lt_longdur + lt_flatdur, "total duration", "\n", "\n",
+    rep1_longdur.wr, "long period duration for replicate 1", "\n",
+    rep1_flatdur.wr, "flat period duration for replicate 1", "\n",
+    rep1_longdur.wr + rep1_flatdur.wr, "total duration", "\n", "\n",
+    rep5_longdur.wr, "long period duration for replicate 5", "\n",
+    rep5_flatdur.wr, "flat period duration for replicate 5", "\n",
+    rep5_longdur.wr + rep5_flatdur.wr, "total duration", "\n", "\n",
+    rep10_longdur.wr, "long period duration for replicate 10", "\n",
+    rep10_flatdur.wr, "flat period duration for replicate 10", "\n",
+    rep10_longdur.wr + rep10_flatdur.wr, "total duration")
+```
+
+
+## Long Period Distribution {.flexbox .vcenter}
+
+```{r long period distribution text, include=FALSE}
+
+# One of the many slots returned in the txnsim object is named "replicates" and includes the replicate start timestamps, the durations and the corresponding quantities. With the duration information in particular, we are able to chart the distribution of long period durations and flat period durations.
+
+# Perhaps not surprisingly, we see the original strategy duration for long and flat periods roughly in the middle of the distributions of the replicates.
+
+```
+
+```{r histogram long period durations longtrend_txnsim flat.to.flat with replacement, echo=FALSE}
+sum_longdur <- function(i){
+  as.numeric(sum(lt.wr$replicates$GSPC[[i]][which(lt.wr$replicates$GSPC[[i]]$quantity > 0),2])/86400)
+}
+list_longdur <- lapply(1:length(lt.wr$replicates$GSPC), sum_longdur)
+hist(unlist(list_longdur), main = "Replicate long period durations",
+     breaks = "FD",
+     # breaks=ceiling((mean(unlist(list_longdur))*5)/(mean(unlist(list_longdur))-sd(unlist(list_longdur)))), 
+     xlab = "Duration (days)", 
+     col = "lightgray", 
+     border = "white")
+original_long <- as.numeric(sum(pt_lt$duration[which(pt_lt$Init.Qty > 0)])/86400) # long duration for original longtrend strategy
+abline(v = original_long, col="black", lty=2)
+hhh = rep(0.2 * par("usr")[3] + 1 * par("usr")[4], 1)
+text(x = original_long, hhh, labels = "Longtrend long period duration", offset = 0.6, pos = 2, cex = 1, srt = 90, col="black")
+```
+
+
+## Flat Period Distribution {.flexbox .vcenter}
+
+```{r flat period distribution text, include=FALSE}
+
+# Since longtrend was a long only strategy, the flat period distribution is a mirror image of the long period distribution.
+
+```
+
+```{r histogram flat period durations longtrend_txnsim flat.to.flat with replacement, echo=FALSE}
+sum_flatdur <- function(i){
+  as.numeric(sum(lt.wr$replicates$GSPC[[i]][which(lt.wr$replicates$GSPC[[i]]$quantity == 0),2])/86400)
+}
+list_flatdur <- lapply(1:length(lt.wr$replicates$GSPC), sum_flatdur)
+hist(unlist(list_flatdur), main = "Replicate flat period durations",
+     breaks = "FD",
+     # breaks=ceiling((mean(unlist(list_longdur))*5)/(mean(unlist(list_longdur))-sd(unlist(list_longdur)))),
+     xlab = "Duration (days)",
+     col = "lightgray",
+     border = "white")
+original_flat <- as.numeric(sum(pt_lt$duration[which(pt_lt$Init.Qty == 0)])/86400) # flat duration for original longtrend strategy
+abline(v = original_flat, col="black", lty=2)
+hhh = rep(0.2 * par("usr")[3] + 1 * par("usr")[4], 1)
+text(x = original_flat, hhh, labels = "Longtrend flat period duration", offset = 0.6, pos = 2, cex = 1, srt = 90, col="black")
+```
+
+
+<!-- ## plot(txnsim) comparison {.flexbox .vcenter} -->
+
+<!-- <!-- Discuss negligible difference between distribution of equity paths for txnsim with and without replacement for a flat.to.flat strategy such as longtrend -->
+
+<!-- ```{r plot longtrend txnsim comparison, fig.width = 10, echo = FALSE} -->
+<!-- par(mfrow = c(1, 2)) -->
+<!-- plot(lt.nr) -->
+<!-- plot(lt.wr) -->
+<!-- par(mfrow = c(1, 1)) #reset this parameter -->
+<!-- ``` -->
+
+
+## Ranks and p-values
+
+```{r ranks_p-values text, include=FALSE}
+
+# Included in the returned list object of class txnsim, are ranks and pvalues which summarise the performance of the originally observed strategy versus the random replicates.
+
+# As we can see, longtrend was in the 90th percentile for all performance metrics analysed except for stddev where it ranked inside the 84th percentile.
+
+```
+
+```{r ranks_1, echo=FALSE}
+top10_idx <- lt.wr$ranks[,6][which(lt.wr$ranks[,6] < 12)][order(lt.wr$ranks[,6][which(lt.wr$ranks[,6] <= 10)])]
+lt.wr$ranks[names(top10_idx),]
+```
+
+</br>
+
+```{r p-values_1, echo=FALSE}
+lt.wr$pvalues
+```
+
+## hist(lt.wr, methods="sharpe") {.flexbox .vcenter}
+
+```{r histograms longtrend Sharpe, echo=FALSE}
+
+# Using the hist method for objects of type txnsim we can plot any of the performance metric distributions to guage how the observed strategy faired overall. Looking at the Sharpe ratio, we see graphically how longtrend does relative to the replicates as well as relative to configurable confidence intervals.
+
+# par(mfrow = c(1, 2))
+hist(lt.wr, methods = "sharpe")
+# hist(lt.wr, methods = "maxDD")
+# par(mfrow = c(1, 1))
+```
+
+## hist(lt.wr, methods="maxDD") {.flexbox .vcenter}
+
+```{r histograms longtrend maxDD, echo=FALSE}
+# Maximum drawdown is another one of the performance metrics used and generally a favorite for simulations. We can see again, visually, that longtrend outperforms most random replicates on this measure.
+
+hist(lt.wr, methods = "maxDD")
+
+```
+
+## Layers and Long/Short strategies with 'bbands' {.flexbox .vcenter}
+
+<!-- For any round turn trade methodology which is not measuring round turns as flat.to.flat, things get more complicated.
+
+The first major complication with any trade that levels into a position is that the sum of trade durations
+will be longer than the market data. The general pattern of the solution is that we sample as usual, to a duration equivalent to the duration of the first layer of the strategy. In essence we are sampling assuming round turns are defined as "flat.to.flat". Any sampled durations beyond this first layer are overlapped onto the first layer. The number of layers is determined by the amount of times the first layer total duration is divisible into the total duration. In this way the total number of layers and their duration is directly related to the original strategy.
+
+The next complication is max position. Now, a strategy may or may not utilize position limits. This is
+irrelevant. We have no idea which parameters are used within a strategy, only what is observable ex post. For this reason we store the maximum long and short positions observed as a stylized fact. To ensure we do not breach these observed max long and short positions during layering we keep track of the respective cumsum of each long and short levelled trade.
+
+For any trade definition other than flat.to.flat, however, we need to be cogniscant of flat periods when layering to ensure we do not layer into an otherwise sampled flat period. For this reason we match the sum duration of flat periods in the original strategy for every replicate. To complete the first layer with long and short periods, we sample these separately and truncate the respectively sampled long and short duration which takes us over our target duration. When determining a target long and short total duration to sample to, we use the ratio of long periods to short periods from the original strategy to distinguish between the direction of non-flat periods.
+
+To highlight the ability of txnsim() to capture the stylized facts of more comprehensive strategies including Long/Short strategies with leveling we use a variation of the 'bbands' strategy. Since we apply a sub-optimal position-sizing adjustment to the original demo strategy in order to illustrate leveling, we do not expect the strategy to outperform the majority of its random counterparts.
+A quick look at the chart.Posn() output of bbands should highlight the difference in charateristics between longtrend and bbands
+-->
+
+```{r bbands_test, include=FALSE}
+require(quantstrat)
+suppressWarnings(rm("order_book.bbands",pos=.strategy))
+suppressWarnings(rm("account.bbands","portfolio.bbands",pos=.blotter))
+suppressWarnings(rm("account.st","portfolio.st","stock.str","stratBBands","startDate","initEq",'start_t','end_t'))
+
+# some things to set up here
+stock.str=c('AAPL') # what are we trying it on
+
+# we'll pass these 
+SD = 2 # how many standard deviations, traditionally 2
+N = 20 # how many periods for the moving average, traditionally 20
+
+
+currency('USD')
+for ( st in stock.str) stock(st,currency='USD',multiplier=1)
+
+startDate='2006-12-31'
+endDate='2017-12-31'
+initEq=1000000
+
+portfolio.st='bbands'
+account.st='bbands'
+
+initPortf(portfolio.st, symbols=stock.str)
+initAcct(account.st,portfolios='bbands')
+initOrders(portfolio=portfolio.st)
+for ( st in stock.str) addPosLimit(portfolio.st, st, startDate, 200, 2 ) #set max pos
+
+# set up parameters
+maType='SMA'
+n = 20
+sdp = 2
+
+strat.st<-portfolio.st
+# define the strategy
+strategy(strat.st, store=TRUE)
+
+#one indicator
+add.indicator(strategy = strat.st, 
+              name = "BBands", 
+              arguments = list(HLC = quote(HLC(mktdata)), 
+                               n=n, 
+                               maType=maType, 
+                               sd=sdp 
+              ), 
+              label='BBands')
+
+
+#add signals:
+add.signal(strategy = strat.st,
+           name="sigCrossover",
+           arguments = list(columns=c("Close","up"),
+                            relationship="gt"),
+           label="Cl.gt.UpperBand")
+
+add.signal(strategy = strat.st,
+           name="sigCrossover",
+           arguments = list(columns=c("Close","dn"),
+                            relationship="lt"),
+           label="Cl.lt.LowerBand")
+
+add.signal(strategy = strat.st,name="sigCrossover",
+           arguments = list(columns=c("High","Low","mavg"),
+                            relationship="op"),
+           label="Cross.Mid")
+
+# lets add some rules
+add.rule(strategy = strat.st,name='ruleSignal',
+         arguments = list(sigcol="Cl.gt.UpperBand",
+                          sigval=TRUE,
+                          orderqty=-100, 
+                          ordertype='market',
+                          orderside=NULL,
+                          threshold=NULL,
+                          osFUN=osMaxPos),
+                          type='enter')
+
+add.rule(strategy = strat.st,name='ruleSignal',
+        arguments = list(sigcol="Cl.lt.LowerBand",
+                         sigval=TRUE,
+                         orderqty= 100, 
+                         ordertype='market',
+                         orderside=NULL,
+                         threshold=NULL,
+                         osFUN=osMaxPos),
+                         type='enter')
+
+add.rule(strategy = strat.st,name='ruleSignal',
+         arguments = list(sigcol="Cross.Mid",
+                          sigval=TRUE,
+                          #orderqty= 'all',
+                          #orderqty= 100,
+                          orderqty= 50,
+                          ordertype='market',
+                          orderside=NULL,
+                          threshold=NULL,
+                          osFUN=osMaxPos),
+         label='exitMid',
+         type='exit')
+
+
+#alternately, to exit at the opposite band, the rules would be...
+#add.rule(strategy = strat.st,name='ruleSignal', arguments = list(data=quote(mktdata),sigcol="Lo.gt.UpperBand",sigval=TRUE, orderqty= 'all', ordertype='market', orderside=NULL, threshold=NULL),type='exit')
+#add.rule(strategy = strat.st,name='ruleSignal', arguments = list(data=quote(mktdata),sigcol="Hi.lt.LowerBand",sigval=TRUE, orderqty= 'all', ordertype='market', orderside=NULL, threshold=NULL),type='exit')
+
+#TODO add thresholds and stop-entry and stop-exit handling to test
+
+getSymbols(stock.str,from=startDate,to=endDate,index.class=c('POSIXt','POSIXct'),src='yahoo')
+
+out<-try(applyStrategy(strategy='bbands' , portfolios='bbands',parameters=list(sd=SD,n=N)) )
+
+# look at the order book
+#getOrderBook('bbands')
+
+updatePortf(Portfolio='bbands',Dates=paste('::',as.Date(Sys.time()),sep=''))
+
+# chart.Posn(Portfolio='bbands',Symbol="AAPL",
+#            TA="add_BBands(on=1,sd=SD,n=N)")
+# plot(add_BBands(on=1,sd=SD,n=N))
+
+# chart.Posn(Portfolio='bbands',Symbol="IBM")
+# plot(add_BBands(on=1,sd=SD,n=N))
+
+```
+
+```{r bbands chart and equity curve, fig.align="center", echo=TRUE}
+chart.Posn(Portfolio='bbands',Symbol="AAPL",TA="add_BBands(on=1,sd=SD,n=N)")
+```
+
+
+## bbands txnsim plot {.flexbox .vcenter}
+
+<!-- We run 1k replicates and the resulting equity curves as you can see here confirm our suspicions. We have a lower probability of outperforming random replicates for this version of 'bbands'. In fact you will see there are periods during the backtest that we severely underperform the other random agents. Something I touch on in the future work section is the addition of something similar to Burns' non-overlapping periodic p-values so we can better visualize just how the backtest performed through time. -->
+
+```{r bbands_txnsim, fig.align="center", include=FALSE}
+# options(error=recover)
+ t1 <- Sys.time()
+# print(Sys.time())
+set.seed(333) #for the purposes of replicating my results
+n <- 1000
+
+ex.txnsim <- function(Portfolio
+                      ,n
+                      ,replacement=FALSE
+                      , tradeDef='increased.to.reduced'
+                      # , tradeDef = 'flat.to.flat'
+                      , chart=FALSE
+)
+{
+  out <- txnsim(Portfolio,n,replacement, tradeDef = tradeDef)
+  if(isTRUE(chart)) {
+    portnames <- blotter:::txnsim.portnames(Portfolio, replacement, n)
+    for (i in 1:n){
+      p<- portnames[i]
+      symbols<-names(getPortfolio(p)$symbols)
+      for(symbol in symbols) {
+        dev.new()
+        chart.Posn(p,symbol)
+      }
+    }
+  }
+  invisible(out)
+}
+
+bb.wr <- ex.txnsim('bbands',n, replacement = TRUE, chart = FALSE)
+```
+
+```{r bbands_txnsim plot, fig.align="center", echo=FALSE}
+plot(bb.wr)
+# print(Sys.time())
+t2 <- Sys.time()
+runtime <- difftime(t2, t1)
+# print(runtime)
+```
+
+
+## bbands winner {.flexbox .vcenter}
+
+<!-- Taking a closer look at the performance and position taking of the "winning" random replicate, we get a sense of how the strategy attempts to mirror the original in terms of position sizing and duration of long versus short positions overall. It should also be evident how the replicate has honored the maximum long and short positions observed in the original strategy. -->
+
+```{r bbands win_rep, fig.align="center", echo=TRUE}
+win_rep <- names(bb.wr$ranks[,6][which(bb.wr$ranks[,6]==1)])
+chart.Posn(Portfolio=win_rep,Symbol="AAPL",TA="add_BBands(on=1,sd=SD,n=N)")
+```
+
+
+## bbands positionFill {.flexbox .vcenter}
+
+<!-- Comparing the position fills of the original strategy and the winning replicate more directly we get a better sense of the overall dynamic of both the original and the winning replicate. What is potentially a red flag from this chart, is the difference in padding. The replicate clearly has less padding, meaning the total duration that the strategy is in the market will be less than the original. -->
+
+```{r bbands_txnsim best totalPL replicate, fig.align="center", echo=FALSE}
+# Next, we take a closer look at a comparison of the position fill through time of the original strategy and the winning replicate, to get a sense of the ability for txnsim to honour the stylized fact constraint. This chart illustrates how a strategy with a high cadence of trading, layering and long/short positions is successfully sampled whilst honouring the original characterisitics of the strategy.
+
+# One thing you might notice is the positionFill bars are not as padded as the original strategy.
+
+# Next, we look at the distribution of long and short period durations to get a better overall sense of things...[TODO: rephrase all this...]
+
+par(mfrow = c(2, 1))
+
+Prices=get("AAPL", envir=.GlobalEnv)
+pname <- "bbands"
+Portfolio<-getPortfolio(pname)
+Position = Portfolio$symbols[["AAPL"]]$txn$Pos.Qty
+if(as.POSIXct(first(index(Prices)))<as.POSIXct(first(index(Position)))){ Position<-rbind(xts(0,order.by=first(index(Prices)-1)),Position)
+}
+Positionfill = na.locf(merge(Position,index(Prices)))
+chart.BarVaR(Positionfill[-1], main ="positionFill - bbands")
+
+win_rep <- names(bb.wr$ranks[,6][which(bb.wr$ranks[,6] == 1)])
+# pname <- "txnsim.wr.bbands.1"
+pname <- win_rep
+Portfolio_1<-getPortfolio(pname)
+Position_1 = Portfolio_1$symbols[["AAPL"]]$txn$Pos.Qty
+if(as.POSIXct(first(index(Prices)))<as.POSIXct(first(index(Position_1)))){ Position_1<-rbind(xts(0,order.by=first(index(Prices)-1)),Position_1)
+}
+Positionfill_1 = na.locf(merge(Position_1,index(Prices)))
+chart.BarVaR(Positionfill_1[-1], main=paste0("positionFill - ", win_rep))
+
+par(mfrow = c(1, 1)) #reset this parameter
+```
+
+
+<!-- ## bbands First Layer Duration consistency -->
+
+<!-- ```{r bbands_txnsim flat duration, fig.align="center", echo=FALSE} -->
+<!-- pt_bb <- perTradeStats("bbands", tradeDef = "flat.to.flat", includeFlatPeriods = TRUE) -->
+<!-- bb_flatdur <- as.numeric(sum(pt_bb$duration[which(pt_bb$Init.Qty == 0)])/86400) # flat duration for original bbands strategy -->
+<!-- bb_longdur <- as.numeric(sum(pt_bb$duration[which(pt_bb$Init.Qty > 0)])/86400) # long duration for original bbands strategy -->
+<!-- bb_shortdur <- as.numeric(sum(pt_bb$duration[which(pt_bb$Init.Qty < 0)])/86400) # short duration for original bbands strategy -->
+<!-- bb_totaldur <- as.numeric(sum(pt_bb$duration)/86400) # total duration for original bbands strategy -->
+
+<!-- # To find the last element in the first layer of replicate 1 -->
+<!-- # should be element #??? -->
+<!-- l1 <- last(which((as.numeric(rownames(bb.wr$replicates$AAPL[[1]]))%%1==0)==1)) -->
+<!-- rep1_flatdur.bbwr <- sum(bb.wr$replicates$AAPL[[1]][which(bb.wr$replicates$AAPL[[1]]$quantity[1:l1] == 0),2])/86400 # flat duration for replicate 1 -->
+<!-- rep1_longdur.bbwr <- sum(bb.wr$replicates$AAPL[[1]][which(bb.wr$replicates$AAPL[[1]]$quantity[1:l1] > 0),2])/86400 # long duration for replicate 1 -->
+<!-- rep1_shortdur.bbwr <- sum(bb.wr$replicates$AAPL[[1]][which(bb.wr$replicates$AAPL[[1]]$quantity[1:l1] < 0),2])/86400 # short duration for replicate 1 -->
+
+<!-- # To find the last element in the first layer of replicate 5 -->
+<!-- # should be element #??? -->
+<!-- l5 <- last(which((as.numeric(rownames(bb.wr$replicates$AAPL[[5]]))%%1==0)==1)) -->
+<!-- rep5_flatdur.bbwr <- sum(bb.wr$replicates$AAPL[[5]][which(bb.wr$replicates$AAPL[[5]]$quantity[1:l5] == 0),2])/86400 # flat duration for replicate 5 -->
+<!-- rep5_longdur.bbwr <- sum(bb.wr$replicates$AAPL[[5]][which(bb.wr$replicates$AAPL[[5]]$quantity[1:l5] > 0),2])/86400 # long duration for replicate 5 -->
+<!-- rep5_shortdur.bbwr <- sum(bb.wr$replicates$AAPL[[5]][which(bb.wr$replicates$AAPL[[5]]$quantity[1:l5] < 0),2])/86400 # short duration for replicate 5 -->
+
+<!-- # To find the last element in the first layer of replicate 10 -->
+<!-- # should be element #??? -->
+<!-- l10 <- last(which((as.numeric(rownames(bb.wr$replicates$AAPL[[10]]))%%1==0)==1)) -->
+<!-- rep10_flatdur.bbwr <- sum(bb.wr$replicates$AAPL[[10]][which(bb.wr$replicates$AAPL[[10]]$quantity[1:l10] == 0),2])/86400 # flat duration for replicate 10 -->
+<!-- rep10_longdur.bbwr <- sum(bb.wr$replicates$AAPL[[10]][which(bb.wr$replicates$AAPL[[10]]$quantity[1:l10] > 0),2])/86400 # long duration for replicate 10 -->
+<!-- rep10_shortdur.bbwr <- sum(bb.wr$replicates$AAPL[[10]][which(bb.wr$replicates$AAPL[[10]]$quantity[1:l10] < 0),2])/86400 # short duration for replicate 10 -->
+
+<!-- # now we sum flat duration, long duration and short duration and compare -->
+<!-- # for the purposes of proving how txnsim honors original strategy durations -->
+<!-- # although flat durations only exist in the first layer -->
+
+<!-- # Flat durations - should equal 584, as per the original strategy -->
+<!-- cat("\n", -->
+<!--     bb_longdur, "first layer long period duration for original strategy", "\n", -->
+<!--     bb_flatdur, "first layer flat period duration for original strategy", "\n", -->
+<!--     bb_shortdur, "first layer short period duration for original strategy", "\n", -->
+<!--     bb_longdur + bb_flatdur + bb_shortdur, "total duration of first layer", "\n", "\n", -->
+
+<!--     rep1_longdur.bbwr, "first layer long period duration for replicate 1", "\n", -->
+<!--     rep1_flatdur.bbwr, "first layer flat period duration for replicate 1", "\n", -->
+<!--     rep1_shortdur.bbwr, "first layer short period duration for replicate 1", "\n", -->
+<!--     rep1_longdur.bbwr + rep1_flatdur.bbwr + rep1_shortdur.bbwr, "total duration of first layer", "\n", "\n", -->
+
+<!--     rep5_longdur.bbwr, "first layer long period duration for replicate 5", "\n", -->
+<!--     rep5_flatdur.bbwr, "first layer flat period duration for replicate 5", "\n", -->
+<!--     rep5_shortdur.bbwr, "first layer short period duration for replicate 5", "\n", -->
+<!--     rep5_longdur.bbwr + rep5_flatdur.bbwr + rep5_shortdur.bbwr, "total duration of first layer") -->
+
+<!--     # rep10_longdur.bbwr, "first layer long period duration for replicate 10", "\n", -->
+<!--     # rep10_flatdur.bbwr, "first layer flat period duration for replicate 10", "\n", -->
+<!--     # rep10_shortdur.bbwr, "first layer short period duration for replicate 10", "\n", -->
+<!--     # rep10_longdur.bbwr + rep10_flatdur.bbwr + rep10_shortdur.bbwr, "total duration of first layer") -->
+<!-- ``` -->
+
+## bbands Long Period distributions  {.flexbox .vcenter}
+
+<!-- When we plot the long and short duration distributions of the replicates and compare these to the original strategy, it highlights the magnitude of the discrepancy and is something we hope to resolve whilst I am in Chicago so we can move onto the txnsim vignette and hopefully the start of a paper on Round Turn Trade Simulations. -->
+
+```{r histogram long period durations bbands_txnsim with replacement, fig.align="center", echo=FALSE}
+pt_bb.i2r <- perTradeStats("bbands", tradeDef = "increased.to.reduced", includeFlatPeriods = TRUE)
+sum_longdur.bb <- function(i){
+  as.numeric(sum(bb.wr$replicates$AAPL[[i]][which(bb.wr$replicates$AAPL[[i]]$quantity > 0),2])/86400)
+}
+list_longdur.bb <- lapply(1:length(bb.wr$replicates$AAPL), sum_longdur.bb)
+original_long.bb <- as.numeric(sum(pt_bb.i2r$duration[which(pt_bb.i2r$Init.Qty > 0)])/86400) # long duration for original bbands strategy
+hist(append(unlist(list_longdur.bb), original_long.bb), main = "Replicate long period durations",
+     breaks = "FD",
+     # breaks=ceiling((mean(unlist(list_longdur.bb))*5)/(mean(unlist(list_longdur.bb))-sd(unlist(list_longdur.bb)))),
+     xlab = "Duration (days)",
+     col = "lightgray",
+     border = "white")
+# original_long.bb <- as.numeric(sum(pt_bb.i2r$duration[which(pt_bb.i2r$Init.Qty > 0)])/86400) # long duration for original bbands strategy
+abline(v = original_long.bb, col="black", lty=2)
+hhh = rep(0.2 * par("usr")[3] + 1 * par("usr")[4], 1)
+text(x = original_long.bb, hhh, labels = "bbands long period duration", offset = 0.6, pos = 2, cex = 1, srt = 90, col="black")
+```
+
+
+## bbands Short Period distributions  {.flexbox .vcenter}
+
+<!-- Show slide -->
+
+```{r histogram short period durations bbands_txnsim with replacement, fig.align="center", echo=FALSE}
+# pt_bb.i2r <- perTradeStats("bbands", tradeDef = "increased.to.reduced", includeFlatPeriods = TRUE)
+sum_shortdur.bb <- function(i){
+  as.numeric(sum(bb.wr$replicates$AAPL[[i]][which(bb.wr$replicates$AAPL[[i]]$quantity < 0),2])/86400)
+}
+list_shortdur.bb <- lapply(1:length(bb.wr$replicates$AAPL), sum_shortdur.bb)
+original_short.bb <- as.numeric(sum(pt_bb.i2r$duration[which(pt_bb.i2r$Init.Qty < 0)])/86400) # long duration for original bbands strategy
+hist(append(unlist(list_shortdur.bb), original_short.bb), main = "Replicate short period durations",
+     breaks = "FD",
+     # breaks=ceiling((mean(unlist(list_longdur.bb))*5)/(mean(unlist(list_longdur.bb))-sd(unlist(list_longdur.bb)))),
+     xlab = "Duration (days)",
+     col = "lightgray",
+     border = "white")
+
+abline(v = original_short.bb, col="black", lty=2)
+hhh = rep(0.2 * par("usr")[3] + 1 * par("usr")[4], 1)
+text(x = original_short.bb, hhh, labels = "bbands short period duration", offset = 0.6, pos = 2, cex = 1, srt = 90, col="black")
+```
+
+
+## Future work
+
+<!-- As mentioned previously and in no particular order, future work items will include: -->
+<!-- .	Refining the layering process to better replicate total trade duration of the original strategy -->
+<!-- .	Adding p-value visualization through time, similar to Pat Burns' 10-day non-overlapping pvalues -->
+<!-- .	Adding other simulation methodologies -->
+<!-- .	Basing simulations on simulated or resampled market data -->
+<!-- .	Applying txnsim stylized facts to market data other than that originally observed -->
+<!-- .	And of course, a vignette and hopefully a paper on Round Turn Trade Simulation -->
+
+>- Refining the layering process
+
+>- Pat Burns' 10-day non-overlapping pvalues
+
+>- Additional simulation methodologies
+
+>- Additional stylized facts
+
+>- Simulation studies of ETF portfolios
+
+>- Simulations with simulated or resampled market data
+
+>- Applying txnsim stylized facts to "OOS" market data
+
+>- A vignette, and hopefully a paper
+
+
+## {.flexbox .vcenter}
+
+
+Round turn trade Monte Carlo simulates random traders who behave in a similar manner to an observed
+series of real or backtest transactions. We feel that round turn trade simulation offers insights significantly beyond what is currently available as open source and txnsim() in particular is well suited to evaluating the question of "skill versus luck or overfitting".
+
+<!-- . equity curve Monte Carlo (implemented in blotter in mcsim), -->
+<!-- . from simple resampling (e.g. from pbo or boot), -->
+<!-- . or from the use of simulated input data (which typically fails to recover many important stylized facts -->
+<!-- of real market data). -->
+
+<!-- Round turn trade Monte Carlo as implemented in txnsim directly analyzes what types of trades and P&L -->
+<!-- were plausible with a similar trade cadence to the observed series. It acts on the same real market data as the observed trades, efficiently searching the feasible space of possible trades given the stylized facts. It is, in our opinion, a significant contribution for any analyst seeking to evaluate the question of "skill vs. luck" of the observed trades, or for more broadly understanding what is theoretically possible with a certain trading cadence and style. -->
+
+
+## References  {.smaller}
+
+Burns, Patrick. 2006. "Random Portfolios for Evaluating Trading Strategies." http://www.burns-stat.com/pages/Working/evalstrat.pdf
+
+Tomasini, Emilio \& Jaekle, Urban. 2009. "Trading Systems: A New Approach to System Development and Portfolio Optimization" 
+
+Bailey, David H, Jonathan M Borwein, Marcos López de Prado, and Qiji Jim Zhu. 2014. "The Probability of Backtest Overfitting." http://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253.
+
+Harvey, Campbell R., and Yan Liu. 2015. "Backtesting." SSRN. http://ssrn.com/abstract=2345489.
+
+Peterson, Brian G. 2017. "Developing \& Backtesting Systematic Trading Strategies." http://goo.gl/na4u5d
+
+
+## Thank you
+
+<div class="centered">
+*Thank You for Your Attention*
+</div>
+
+Thanks to Brian Peterson, Joshua Ulrich, all the contributors to quantstrat and blotter, to the R/Finance committee and sponsors, R community and last but certainly not least, UIC and Mary Deering.
